@@ -44,7 +44,8 @@ Transforma controles **DJI RC Pro Enterprise (RM510B)**, **DJI RC-N1 (Air 2S / M
 
 ---
 
-## 📄 Licença e Créditos
+## 📄 Licença, Créditos e Ferramentas
 
+- **Desenvolvido com [Google Antigravity](https://antigravity.google):** Toda a engenharia reversa do protocolo DUML no **DJI RC Pro Enterprise (`RM510B`)**, diagnóstico e correção do lag de sequência de pacotes, solução do erro Código 31 do `WinUSB.sys` no Registro do Windows e automação Plug-and-Play sem Zadig foram desenvolvidos em pair programming com o **Antigravity**.
 - Baseado no projeto original [DJI-RC-Emulator](https://github.com/deviverr/DJI-RC-Emulator) (MIT License).
-- Engenharia reversa de protocolo DUML (`RM510B`), correção de latência, suporte ao gimbal no DJI Virtual Flight e automação Plug-and-Play WinUSB/Code 31 por **Vicente** ([@rojaooo](https://github.com/rojaooo)).
+- Autor das melhorias e adaptação Plug-and-Play: **Vicente** ([@rojaooo](https://github.com/rojaooo)).

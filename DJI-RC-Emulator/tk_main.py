@@ -25,21 +25,82 @@ logging.basicConfig(
 logger = logging.getLogger("tk_main")
 
 
+_last_com_reclaim_time = 0.0
+
+
 def kill_other_instances():
-    """Close any OTHER running copy of this emulator (tk_main.py) so only one holds the DJI USB
-    interface and one virtual Xbox pad exists. Unrelated Python processes are never touched."""
+    """Close any OTHER running copy of this emulator (tk_main.py, main.py, or DJI RC Emulator.exe)
+    so only one holds the DJI USB/COM interface and one virtual Xbox pad exists."""
     my_pid = os.getpid()
     try:
         cmd = (
             'powershell -NoProfile -Command "'
+            "Stop-Process -Name 'DJI RC Emulator' -Force -ErrorAction SilentlyContinue; "
             "Get-CimInstance Win32_Process -Filter \\\"Name like 'python%'\\\" | "
-            "Where-Object { $_.CommandLine -match 'tk_main\\.py' -and $_.ProcessId -ne " + str(my_pid) + " } | "
+            "Where-Object { ($_.CommandLine -match 'tk_main\\.py|main\\.py') -and $_.ProcessId -ne " + str(my_pid) + " } | "
             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\""
         )
         subprocess.run(cmd, shell=True, timeout=6, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.3)
     except Exception as e:
         logger.debug("kill_other_instances: %s", e)
+
+
+def reclaim_locked_com_port(com_port: str) -> serial.Serial | None:
+    """
+    When DJI Virtual Flight (DFSM-Win64-Shipping.exe) or an old process grabs COM3 before the
+    emulator, restart the DJI USB VCOM PnP device while polling serial.Serial(com_port) every 2ms
+    so our emulator snatches the exclusive COM handle first.
+    """
+    global _last_com_reclaim_time
+    now = time.time()
+    if now - _last_com_reclaim_time < 18.0:
+        return None
+    _last_com_reclaim_time = now
+
+    my_pid = os.getpid()
+    ps_script = (
+        f"Stop-Process -Name 'DJI RC Emulator' -Force -ErrorAction SilentlyContinue; "
+        f"Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
+        f"Where-Object {{ ($_.CommandLine -match 'tk_main\\.py|main\\.py') -and $_.ProcessId -ne {my_pid} }} | "
+        f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}; "
+        f"Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue | "
+        f"Where-Object {{ $_.FriendlyName -match '{com_port}' -or $_.InstanceId -match 'VID_2CA3|VID_FFF0' }} | "
+        f"ForEach-Object {{ pnputil /restart-device \"$($_.InstanceId)\" | Out-Null }}"
+    )
+
+    def _trigger_reset():
+        try:
+            import ctypes
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            is_admin = False
+        try:
+            if is_admin:
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                    timeout=10,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                elev_cmd = (
+                    "Start-Process powershell -WindowStyle Hidden -Verb RunAs "
+                    f"-ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"{ps_script}\"'"
+                )
+                subprocess.run(["powershell", "-NoProfile", "-Command", elev_cmd], timeout=10)
+        except Exception as e:
+            logger.debug("reclaim_locked_com_port reset error: %s", e)
+
+    Thread(target=_trigger_reset, daemon=True, name="COMReclaim").start()
+
+    deadline = time.perf_counter() + 6.5
+    while time.perf_counter() < deadline:
+        try:
+            return serial.Serial(port=com_port, baudrate=115200, timeout=0.015, write_timeout=0.5)
+        except Exception:
+            time.sleep(0.002)
+    return None
 
 
 from src.config_manager import ConfigManager
@@ -172,11 +233,23 @@ class DualThreadRCReader:
 
     def _supervisor_loop(self):
         while not self._stop.is_set():
+            serial_err = None
             try:
-                # 1. Try Serial COM port first (used by DJI RC-N1 / Air 2S controller on bottom USB-C port)
+                # 1. Try Serial COM port if present (used by DJI RC-N1 / Air 2S controller on bottom USB-C port)
                 com_port = find_dji_port()
                 if com_port:
-                    self._serial = serial.Serial(port=com_port, baudrate=115200, timeout=0.015, write_timeout=0.5)
+                    try:
+                        self._serial = serial.Serial(port=com_port, baudrate=115200, timeout=0.015, write_timeout=0.5)
+                    except Exception as e:
+                        err_str = str(e)
+                        if "PermissionError" in err_str or "Acesso negado" in err_str or "Access is denied" in err_str:
+                            if self.on_error:
+                                self.on_error(f"Liberando porta {com_port} automaticamente...")
+                            self._serial = reclaim_locked_com_port(com_port)
+                        if self._serial is None:
+                            serial_err = e
+
+                if self._serial is not None:
                     self._serial.write(build_enable_simulator())
                     time.sleep(0.05)
                     self._serial.reset_input_buffer()
@@ -195,8 +268,19 @@ class DualThreadRCReader:
                     reader.join(timeout=1.0)
                 else:
                     # 2. Try USB Bulk (DJI RC Pro Enterprise, DJI RC, RC 2, RC-N1/N2/N3 via WinUSB)
-                    self._usb = USBBulkTransport()
-                    self._usb.open()
+                    try:
+                        self._usb = USBBulkTransport()
+                        self._usb.open()
+                    except Exception as usb_exc:
+                        if serial_err is not None:
+                            s_msg = str(serial_err)
+                            if "PermissionError" in s_msg or "Acesso negado" in s_msg or "Access is denied" in s_msg:
+                                raise ConnectionError(
+                                    f"Porta {com_port} presa pelo DJI Virtual Flight! Feche o simulador, espere ficar VERDE aqui e abra o simulador depois."
+                                ) from serial_err
+                            raise serial_err
+                        raise usb_exc
+
                     self._usb.write(build_enable_simulator())
                     time.sleep(0.05)
 

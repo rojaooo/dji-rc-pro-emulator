@@ -1,3 +1,4 @@
+import ctypes
 """
 Ultra-Low-Latency 2-Thread Tkinter GUI for DJI RC Pro Enterprise Simulator Controller.
 - Automatically kills any duplicate Python RC processes on startup so only 1 Xbox 360 Controller exists.
@@ -46,6 +47,9 @@ def kill_other_instances():
     except Exception as e:
         logger.debug("kill_other_instances: %s", e)
 
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 def reclaim_locked_com_port(com_port: str) -> serial.Serial | None:
     """
@@ -492,9 +496,16 @@ class TkApp:
         self._latest_processed = None
         self._gimbal_held_pos = 0.0  # -1.0 .. +1.0 for held-angle mode
         self._last_stick_time = time.perf_counter()
-        self.sim_flight_mode = "NORMAL"
+        self.sim_flight_mode = None  # Tracked simulator mode: 'N', 'S', or 'M'
         self.current_switch_mode = None
         self._last_fn_state = False
+
+        # Flight mode auto-click coordinates (defaults to bottom-left corner)
+        screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+        screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+        default_pos = [int(screen_w * 0.055), int(screen_h * 0.915)]
+        saved_pos = self.config.get("flight_mode_click_pos", default_pos)
+        self.flight_mode_click_pos = (saved_pos[0], saved_pos[1])
 
         self._build_ui()
 
@@ -603,20 +614,29 @@ class TkApp:
             lbl.pack(side=tk.LEFT, padx=2)
             self.btn_labels[name] = lbl
 
-        tk.Label(mid, text="Modo de Voo (Chavinha Física)", fg="#cdd6f4", bg="#1e1e2e", font=("Segoe UI", 9, "bold")).pack(pady=(8, 3))
+        tk.Label(mid, text="Modo de Voo no Simulador (Chavinha Física)", fg="#cdd6f4", bg="#1e1e2e", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
         mode_row = tk.Frame(mid, bg="#1e1e2e")
         mode_row.pack()
         self.mode_labels = {}
-        for m_name in ["CINE", "NORMAL", "SPORT"]:
-            lbl = tk.Label(mode_row, text=f" {m_name} ", bg="#313244", fg="#6c7086", padx=8, pady=3, font=("Segoe UI", 9, "bold"))
-            lbl.pack(side=tk.LEFT, padx=3)
-            self.mode_labels[m_name] = lbl
+        for m_key, m_label in [("M", " M (Cine) "), ("N", " N (Normal) "), ("S", " S (Sport) ")]:
+            lbl = tk.Label(mode_row, text=m_label, bg="#313244", fg="#6c7086", padx=6, pady=2, font=("Segoe UI", 8, "bold"))
+            lbl.pack(side=tk.LEFT, padx=2)
+            self.mode_labels[m_key] = lbl
 
-        btn_resync = tk.Button(
-            mode_row, text="🔄 Sincronizar", bg="#313244", fg="#89b4fa", activebackground="#45475a",
-            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=6, pady=2, command=self._resync_flight_mode
-        )
-        btn_resync.pack(side=tk.LEFT, padx=(6, 0))
+        tk.Button(
+            mode_row, text="🎯 Calibrar", bg="#313244", fg="#f9e2af", activebackground="#45475a",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=5, pady=1, command=self._start_click_calibration
+        ).pack(side=tk.LEFT, padx=(6, 2))
+
+        tk.Button(
+            mode_row, text="🖱️ Testar", bg="#313244", fg="#89b4fa", activebackground="#45475a",
+            font=("Segoe UI", 8), relief=tk.FLAT, padx=5, pady=1, command=self._test_click_sim_mode
+        ).pack(side=tk.LEFT, padx=2)
+
+        tk.Button(
+            mode_row, text="🔄 Sinc (N)", bg="#313244", fg="#a6adc8", activebackground="#45475a",
+            font=("Segoe UI", 8), relief=tk.FLAT, padx=5, pady=1, command=self._resync_flight_mode
+        ).pack(side=tk.LEFT, padx=2)
 
         self.right_stick = StickCanvas(sticks_frame, "Stick Direito (Pitch / Roll)", size=190)
         self.right_stick.pack(side=tk.RIGHT, padx=10)
@@ -752,21 +772,82 @@ class TkApp:
             self.lbl_rate.config(text="Taxa USB: 0 Hz")
         self.root.after(1000, self._stats_tick)
 
+    def _click_flight_mode_button(self, clicks: int = 1):
+        """Executa cliques no botão do simulador no canto inferior esquerdo sem roubar o mouse do usuário."""
+        def _worker():
+            user32 = ctypes.windll.user32
+            x, y = self.flight_mode_click_pos
+            orig_pt = POINT()
+            user32.GetCursorPos(ctypes.byref(orig_pt))
+            for _ in range(clicks):
+                user32.SetCursorPos(x, y)
+                time.sleep(0.02)
+                user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                time.sleep(0.04)
+                user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+                time.sleep(0.12)  # Delay para a interface do jogo avançar o modo
+            user32.SetCursorPos(orig_pt.x, orig_pt.y)
+        Thread(target=_worker, daemon=True, name="AutoClickMode").start()
+
+    def _start_click_calibration(self):
+        self.lbl_msg.config(
+            text="🎯 Calibração iniciada! Vá no jogo e dê UM clique normal no botão de modo...",
+            fg="#f9e2af"
+        )
+        def _listen():
+            user32 = ctypes.windll.user32
+            # Aguarda soltar o mouse se estiver pressionado
+            while user32.GetAsyncKeyState(0x01) & 0x8000:
+                time.sleep(0.05)
+            # Aguarda o próximo clique em até 15 segundos
+            deadline = time.time() + 15.0
+            while time.time() < deadline:
+                if user32.GetAsyncKeyState(0x01) & 0x8000:
+                    pt = POINT()
+                    user32.GetCursorPos(ctypes.byref(pt))
+                    self.root.after(0, self._save_calibrated_click, pt.x, pt.y)
+                    return
+                time.sleep(0.02)
+            self.root.after(0, lambda: self.lbl_msg.config(text="Calibração cancelada (tempo esgotado).", fg="#f38ba8"))
+        Thread(target=_listen, daemon=True, name="ClickCalib").start()
+
+    def _save_calibrated_click(self, x: int, y: int):
+        self.flight_mode_click_pos = (x, y)
+        try:
+            self.config["flight_mode_click_pos"] = [x, y]
+            self.config_mgr.set("flight_mode_click_pos", [x, y])
+            self.config_mgr.save()
+        except Exception as e:
+            logger.debug("save flight_mode_click_pos: %s", e)
+        self.lbl_msg.config(
+            text=f"✅ Posição salva ({x}, {y})! A chavinha agora clica automaticamente no simulador.",
+            fg="#a6e3a1"
+        )
+
+    def _test_click_sim_mode(self):
+        self._click_flight_mode_button(1)
+        self.lbl_msg.config(
+            text=f"🖱️ Clique de teste enviado para ({self.flight_mode_click_pos[0]}, {self.flight_mode_click_pos[1]})!",
+            fg="#89b4fa"
+        )
+
     def _on_flight_mode(self, mode_name: str):
         self.root.after(0, self._handle_flight_mode_change, mode_name)
 
     def _handle_flight_mode_change(self, mode_name: str):
-        if mode_name not in ("CINE", "NORMAL", "SPORT"):
+        # Mapeamento: CINE (esquerda) = M | NORMAL (meio) = N | SPORT (direita) = S
+        target_sim_mode = {"CINE": "M", "NORMAL": "N", "SPORT": "S"}.get(mode_name)
+        if not target_sim_mode:
             return
 
         colors = {
-            "CINE": ("#89b4fa", "#11111b"),    # Blue
-            "NORMAL": ("#a6e3a1", "#11111b"),  # Green
-            "SPORT": ("#fab387", "#11111b"),   # Orange
+            "M": ("#89b4fa", "#11111b"),    # Azul
+            "N": ("#a6e3a1", "#11111b"),    # Verde
+            "S": ("#fab387", "#11111b"),    # Laranja
         }
-        for name, lbl in self.mode_labels.items():
-            if name == mode_name:
-                bg_col, fg_col = colors.get(name, ("#89b4fa", "#11111b"))
+        for mode_key, lbl in self.mode_labels.items():
+            if mode_key == target_sim_mode:
+                bg_col, fg_col = colors.get(mode_key, ("#a6e3a1", "#11111b"))
                 lbl.config(bg=bg_col, fg=fg_col)
             else:
                 lbl.config(bg="#313244", fg="#6c7086")
@@ -774,42 +855,45 @@ class TkApp:
         prev_switch = self.current_switch_mode
         self.current_switch_mode = mode_name
 
+        mode_cycle = {"N": 0, "S": 1, "M": 2}
+        target_idx = mode_cycle[target_sim_mode]
+
         if prev_switch is None:
-            # Primeiro posicionamento detectado ao conectar
-            mode_idx = {"NORMAL": 0, "SPORT": 1, "CINE": 2}
-            pulses = mode_idx.get(mode_name, 0)
-            if pulses > 0 and self.gamepad.is_initialized:
-                self.gamepad.pulse_button_async('X', count=pulses)
-                self.sim_flight_mode = mode_name
+            # Primeira detecção ao ligar o controle:
+            # Se a chave já estiver em S ou M, clica no simulador (que inicia sempre em N)
+            self.sim_flight_mode = target_sim_mode
+            clicks = target_idx
+            if clicks > 0:
+                self._click_flight_mode_button(clicks)
                 self.lbl_msg.config(
-                    text=f"Chavinha em {mode_name}: Sincronizando com simulador ({pulses}x X)...",
+                    text=f"Chavinha em {target_sim_mode}: Sincronizando com simulador ({clicks} clique{'s' if clicks > 1 else ''})...",
                     fg="#a6e3a1"
                 )
             return
 
         if mode_name != prev_switch:
-            mode_idx = {"NORMAL": 0, "SPORT": 1, "CINE": 2}
-            target_idx = mode_idx[mode_name]
-            current_idx = mode_idx.get(self.sim_flight_mode, 0)
-            pulses = (target_idx - current_idx) % 3
-            if pulses > 0 and self.gamepad.is_initialized:
-                self.gamepad.pulse_button_async('X', count=pulses)
-                self.sim_flight_mode = mode_name
+            # O usuário mudou a chave física!
+            # Ciclo do simulador: N -> S -> M -> N
+            current_sim_idx = mode_cycle.get(self.sim_flight_mode, 0)
+            clicks = (target_idx - current_sim_idx) % 3
+            if clicks > 0:
+                self._click_flight_mode_button(clicks)
+                self.sim_flight_mode = target_sim_mode
                 self.lbl_msg.config(
-                    text=f"Chavinha alterada para {mode_name}! Alternando modo no simulador ({pulses}x)...",
+                    text=f"Chavinha alterada para {target_sim_mode}! Clicando no simulador ({clicks}x)...",
                     fg="#a6e3a1"
                 )
 
     def _resync_flight_mode(self):
-        """Força a sincronização do simulador com a posição atual da chavinha (assume início em NORMAL)."""
-        mode = self.current_switch_mode or "NORMAL"
-        mode_idx = {"NORMAL": 0, "SPORT": 1, "CINE": 2}
-        pulses = mode_idx.get(mode, 0)
-        if pulses > 0 and self.gamepad.is_initialized:
-            self.gamepad.pulse_button_async('X', count=pulses)
-        self.sim_flight_mode = mode
+        """Redefine a sincronização assumindo que o simulador está em N (Normal)."""
+        target = {"CINE": "M", "NORMAL": "N", "SPORT": "S"}.get(self.current_switch_mode, "N")
+        mode_cycle = {"N": 0, "S": 1, "M": 2}
+        clicks = mode_cycle[target]
+        if clicks > 0:
+            self._click_flight_mode_button(clicks)
+        self.sim_flight_mode = target
         self.lbl_msg.config(
-            text=f"Modo sincronizado: Chavinha em {mode}!",
+            text=f"Sincronizado! Modo atual definido para {target}.",
             fg="#a6e3a1"
         )
 

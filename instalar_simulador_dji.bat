@@ -4,23 +4,24 @@ cd /d "%~dp0"
 title Instalador DJI Virtual Flight (PC)
 
 set "SIM_EXE=1661500931886-DJI Virtual Flight.exe"
-set "SIM_URL=https://dl.djicdn.com/downloads/dji_virtual_flight/20220826/1661500931886-DJI%%20Virtual%%20Flight.exe"
+set "DJI_PAGE=https://www.dji.com/br/downloads/products/dji-virtual-flight#other_software"
 
+:: Verifica se o arquivo .exe existe e se tem mais de 100 MB (evita arquivo corrompido de 1 KB)
 if exist "%SIM_EXE%" (
-    echo Iniciando instalador local do DJI Virtual Flight...
-    start "" "%SIM_EXE%"
-    exit /b
+    for %%A in ("%SIM_EXE%") do (
+        if %%~zA GTR 100000000 (
+            echo Iniciando instalador local do DJI Virtual Flight...
+            start "" "%SIM_EXE%"
+            exit /b
+        ) else (
+            echo Removendo arquivo incompleto/corrompido de 1 KB...
+            del /f /q "%SIM_EXE%" >nul 2>&1
+        )
+    )
 )
 
-echo Baixando instalador oficial do DJI Virtual Flight (~3.0 GB) direto do servidor da DJI...
-echo Isso pode levar alguns minutos dependendo da sua conexao.
+echo Abrindo a pagina oficial da DJI para baixar o DJI Virtual Flight (Windows)...
+echo Na pagina que abrir, clique em "Download" ao lado de "DJI Virtual Flight (Windows)".
 echo.
-curl.exe -L -o "%SIM_EXE%" "%SIM_URL%"
-if exist "%SIM_EXE%" (
-    echo Download concluido! Iniciando instalador...
-    start "" "%SIM_EXE%"
-) else (
-    echo Falha ao baixar automaticamente. Abrindo link oficial no navegador...
-    start "" "%SIM_URL%"
-)
+start "" "%DJI_PAGE%"
 pause

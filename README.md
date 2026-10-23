@@ -36,7 +36,7 @@ Transforma controles **DJI RC Pro Enterprise (RM510B)**, **DJI RC-N1 (Air 2S / M
 
 ## ⚡ Como Usar (Plug and Play)
 
-1. **Instale o Simulador (se ainda não tiver):** dê dois cliques em **[`instalar_simulador_dji.bat`](instalar_simulador_dji.bat)** (ele executa o instalador local `1661500931886-DJI Virtual Flight.exe` se estiver no pendrive, ou baixa automaticamente a versão oficial de PC direto do CDN da DJI: [Download Direto DJI Virtual Flight PC (3.0 GB)](https://dl.djicdn.com/downloads/dji_virtual_flight/20220826/1661500931886-DJI%20Virtual%20Flight.exe)).
+1. **Instale o Simulador (se ainda não tiver):** baixe o instalador oficial para Windows na página da DJI: **[DJI Virtual Flight — Download Oficial (Windows)](https://www.dji.com/br/downloads/products/dji-virtual-flight#other_software)** (ou dê dois cliques em **[`instalar_simulador_dji.bat`](instalar_simulador_dji.bat)**).
 2. Conecte o controle DJI ligado ao PC pela porta **USB-C de baixo**.
 3. Dê dois cliques em **[`start.bat`](start.bat)**:
    - Se for um PC novo, o próprio [`start.bat`](start.bat) instala automaticamente o Python (se não houver), as bibliotecas (`vgamepad`, `pyusb`, `libusb`, `pyserial`), o driver do controle virtual Xbox 360 (`ViGEmBus`) e o driver USB da DJI sem Zadig.

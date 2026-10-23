@@ -191,6 +191,8 @@ class DualThreadRCReader:
         self.connected = False
         self.port_name = ""
         self.packets_per_sec = 0.0
+        # True = emulator releases the COM/USB port so the simulator drives the controller natively (FPV mode)
+        self.native_fpv_mode = False
 
         self.on_stick_data = None
         self.on_connection_changed = None
@@ -233,6 +235,10 @@ class DualThreadRCReader:
 
     def _supervisor_loop(self):
         while not self._stop.is_set():
+            if self.native_fpv_mode:
+                self._close()
+                self._stop.wait(0.3)
+                continue
             serial_err = None
             try:
                 # 1. Try Serial COM port if present (used by DJI RC-N1 / Air 2S controller on bottom USB-C port)
@@ -353,7 +359,7 @@ class DualThreadRCReader:
                 break
 
     def _paced_serial_writer(self, conn_stop: Event):
-        while not self._stop.is_set() and not conn_stop.is_set():
+        while not self._stop.is_set() and not conn_stop.is_set() and not self.native_fpv_mode:
             now = time.perf_counter()
             if (now - self._last_rx_time) > 2.5:
                 raise ConnectionError("Conexão Serial com controle DJI perdida")
@@ -401,7 +407,7 @@ class DualThreadRCReader:
 
     def _paced_writer(self, conn_stop: Event):
         """Paced writer thread: sends read_sticks at ~140 Hz and pushes newest stick data."""
-        while not self._stop.is_set() and not conn_stop.is_set():
+        while not self._stop.is_set() and not conn_stop.is_set() and not self.native_fpv_mode:
             now = time.perf_counter()
             if (now - self._last_rx_time) > 2.5:
                 raise ConnectionError("Conexão USB com controle DJI perdida")
@@ -466,7 +472,10 @@ class TkApp:
         else:
             self.lbl_gamepad.config(text="Gamepad Virtual: Falha ao iniciar ViGEmBus", fg="#f38ba8")
 
+        self.rc.native_fpv_mode = self.sim_mode.get() == "fpv"
         self._toggle_connect()
+        if self.rc.native_fpv_mode:
+            self._on_sim_mode_change()
 
         self.root.after(16, self._ui_tick)
         self.root.after(1000, self._stats_tick)
@@ -527,6 +536,26 @@ class TkApp:
             )
             rb.pack(side=tk.LEFT, padx=4)
 
+        # Simulator mode selector: normal drone (virtual Xbox pad) vs native FPV controller
+        sim_bar = tk.Frame(self.root, bg="#181825", padx=12, pady=6)
+        sim_bar.pack(fill=tk.X, padx=16, pady=(0, 4))
+        tk.Label(
+            sim_bar, text="Modo do Simulador:", fg="#cdd6f4", bg="#181825",
+            font=("Segoe UI", 9, "bold")
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        self.sim_mode = tk.StringVar(value=self.config.get("sim_mode", "normal"))
+        for text, val in [
+            ("Drone Normal (Xbox 360 virtual)", "normal"),
+            ("FPV nativo (libera a COM pro simulador)", "fpv"),
+        ]:
+            tk.Radiobutton(
+                sim_bar, text=text, variable=self.sim_mode, value=val,
+                command=self._on_sim_mode_change,
+                bg="#181825", fg="#cdd6f4", selectcolor="#313244",
+                activebackground="#181825", activeforeground="#89b4fa",
+                font=("Segoe UI", 8)
+            ).pack(side=tk.LEFT, padx=4)
+
         # Main sticks area
         sticks_frame = tk.Frame(self.root, bg="#1e1e2e", padx=12, pady=4)
         sticks_frame.pack(fill=tk.BOTH, expand=True)
@@ -569,6 +598,25 @@ class TkApp:
             fg="#a6e3a1", bg="#181825", font=("Segoe UI", 9)
         )
         self.lbl_msg.pack(side=tk.LEFT)
+
+    def _on_sim_mode_change(self):
+        fpv = self.sim_mode.get() == "fpv"
+        self.rc.native_fpv_mode = fpv
+        try:
+            self.config_mgr.set("sim_mode", self.sim_mode.get())
+            self.config_mgr.save()
+        except Exception as e:
+            logger.debug("save sim_mode: %s", e)
+        if fpv:
+            self.lbl_status.config(text="● Modo FPV nativo: porta liberada para o simulador", fg="#f9e2af")
+            self.lbl_msg.config(
+                text="O simulador controla o RC direto (como controle FPV). Sticks NAO passam pelo Xbox virtual.",
+                fg="#f9e2af")
+        else:
+            self.lbl_status.config(text="● Procurando controle DJI via USB...", fg="#f9e2af")
+            self.lbl_msg.config(
+                text="Modo Drone Normal: espere ficar VERDE aqui e SO ENTAO abra o simulador.",
+                fg="#a6e3a1")
 
     def _toggle_connect(self):
         if self.rc.connected or (self.rc._main_thread and self.rc._main_thread.is_alive()):
@@ -648,6 +696,8 @@ class TkApp:
             if connected:
                 self.lbl_status.config(text=f"● Conectado: {port}", fg="#a6e3a1")
                 self.btn_connect.config(text="Desconectar")
+            elif self.rc.native_fpv_mode:
+                self.lbl_status.config(text="● Modo FPV nativo: porta liberada para o simulador", fg="#f9e2af")
             else:
                 self.lbl_status.config(text="● Desconectado", fg="#f38ba8")
                 self.btn_connect.config(text="Conectar")

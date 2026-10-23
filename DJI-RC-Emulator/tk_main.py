@@ -541,7 +541,7 @@ class TkApp:
         tk.Label(mid, text="Rodinha do Gimbal (Entrada)", fg="#cdd6f4", bg="#1e1e2e", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
         self.cam_bar = DialBar(mid, width=180, height=16)
         self.cam_bar.pack()
-        self.lbl_cam = tk.Label(mid, text="0.00  (LT: 128 | RT: 0)", fg="#89b4fa", bg="#1e1e2e", font=("Consolas", 9, "bold"))
+        self.lbl_cam = tk.Label(mid, text="0.00  (LT:   0 | RT: 0)", fg="#89b4fa", bg="#1e1e2e", font=("Consolas", 9, "bold"))
         self.lbl_cam.pack(pady=(2, 6))
 
         tk.Label(mid, text="Posição Atual do Gimbal", fg="#cdd6f4", bg="#1e1e2e", font=("Segoe UI", 9, "bold")).pack(pady=(4, 2))
@@ -554,7 +554,7 @@ class TkApp:
         btn_row = tk.Frame(mid, bg="#1e1e2e")
         btn_row.pack()
         self.btn_labels = {}
-        for name, label in [("c1", "C1"), ("c2", "C2"), ("photo", "Foto"), ("video", "Vídeo"), ("fn", "Fn")]:
+        for name, label in [("c1", "C1"), ("c2", "C2"), ("photo", "Foto"), ("video", "Vídeo"), ("fn", "Fn (Modo de Voo)")]:
             lbl = tk.Label(btn_row, text=label, bg="#313244", fg="#6c7086", padx=6, pady=3, font=("Segoe UI", 8, "bold"))
             lbl.pack(side=tk.LEFT, padx=2)
             self.btn_labels[name] = lbl

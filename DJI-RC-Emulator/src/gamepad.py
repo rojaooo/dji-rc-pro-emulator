@@ -92,7 +92,7 @@ class VirtualGamepad:
             'c2': 'RB',
             'photo': 'A',
             'video': 'X',
-            'fn': 'Back',
+            'fn': 'X',  # Botao FN alterna o modo de voo (Cine / Normal / Sport) no simulador
             'scroll_up': 'DPad Up',
             'scroll_down': 'DPad Down',
         }

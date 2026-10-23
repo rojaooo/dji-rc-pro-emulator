@@ -651,11 +651,13 @@ class TkApp:
 
         mode = self.gimbal_mode.get()
         processed["dial"] = active_dial
+        # IMPORTANTE: No DJI Virtual Flight, LT aciona o FREIO DO DRONE.
+        # Por padrao, mantemos os gatilhos LT e RT estritamente em ZERO para o drone voar livremente.
+        processed["left_trigger"] = 0
+        processed["right_trigger"] = 0
+
         if mode == "dpad":
-            # Proportional PWM on D-Pad Up/Down + proportional LT/RT triggers:
-            # Small wheel tilt -> gentle pulses for fine gimbal adjustment; full tilt -> continuous hold.
-            processed["left_trigger"] = int(max(0.0, min(1.0, -active_dial)) * 255)
-            processed["right_trigger"] = int(max(0.0, min(1.0, active_dial)) * 255)
+            # Inclina a camera via D-Pad para cima / baixo sem travar o freio
             mag = abs(active_dial)
             if mag < 0.05:
                 self._dpad_accum = 0.0
@@ -673,20 +675,18 @@ class TkApp:
             processed["scroll_down"] = fire and (active_dial < 0)
             self._gimbal_held_pos = active_dial
         elif mode == "held_lt":
-            # Integrate wheel smoothly so you can nudge the gimbal up/down slightly and it stays!
             self._gimbal_held_pos = max(-1.0, min(1.0, self._gimbal_held_pos + active_dial * dt * 0.9))
-            lt_val = int(((self._gimbal_held_pos + 1.0) * 0.5) * 255)
-            processed["left_trigger"] = max(0, min(255, lt_val))
-            processed["right_trigger"] = int(max(0.0, min(1.0, (active_dial + 1.0) * 0.5)) * 255) if abs(active_dial) > 0 else 0
+            # Somente envia trigger se a rodinha for acionada ativamente
+            if abs(self._gimbal_held_pos) > 0.05:
+                processed["right_trigger"] = int(abs(self._gimbal_held_pos) * 255)
         elif mode == "single_lt":
             self._gimbal_held_pos = active_dial
-            processed["left_trigger"] = int(max(0.0, min(1.0, (active_dial + 1.0) * 0.5)) * 255)
-            processed["right_trigger"] = int(max(0.0, min(1.0, (scr_smooth + 1.0) * 0.5)) * 255)
+            if abs(active_dial) > 0.05:
+                processed["right_trigger"] = int(abs(active_dial) * 255)
         else:
-            # Smooth proportional LT (down) / RT (up) without any button jerks
             self._gimbal_held_pos = active_dial
-            processed["left_trigger"] = int(max(0.0, min(1.0, -active_dial)) * 255)
-            processed["right_trigger"] = int(max(0.0, min(1.0, active_dial)) * 255)
+            if active_dial > 0.05:
+                processed["right_trigger"] = int(active_dial * 255)
 
         if self.gamepad.is_initialized:
             self.gamepad.push(processed)

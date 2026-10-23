@@ -60,11 +60,11 @@ $infVcom = Join-Path $drvDir 'dji_vcom_driver11.inf'
 $dx64 = Join-Path $dxDir 'x64'
 if (Test-Path $dx64) {{
     Get-ChildItem -Path $dx64 -Filter '*.dll' | ForEach-Object {{
-        $dest = Join-Path "$env:SystemRoot\System32" $_.Name
+        $dest = Join-Path "$env:SystemRoot\\System32" $_.Name
         if (-not (Test-Path $dest)) {{
             Copy-Item -Path $_.FullName -Destination $dest -Force
         }}
-        $djiWin64 = 'C:\Program Files (x86)\DJI\DJI Virtual Flight\WindowsNoEditor\DFSM\Binaries\Win64'
+        $djiWin64 = 'C:\\Program Files (x86)\\DJI\\DJI Virtual Flight\\WindowsNoEditor\\DFSM\\Binaries\\Win64'
         if (Test-Path $djiWin64) {{
             Copy-Item -Path $_.FullName -Destination (Join-Path $djiWin64 $_.Name) -Force
         }}
@@ -73,7 +73,7 @@ if (Test-Path $dx64) {{
 $dx86 = Join-Path $dxDir 'x86'
 if (Test-Path $dx86) {{
     Get-ChildItem -Path $dx86 -Filter '*.dll' | ForEach-Object {{
-        $dest = Join-Path "$env:SystemRoot\SysWOW64" $_.Name
+        $dest = Join-Path "$env:SystemRoot\\SysWOW64" $_.Name
         if (-not (Test-Path $dest)) {{
             Copy-Item -Path $_.FullName -Destination $dest -Force
         }}

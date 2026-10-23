@@ -11,6 +11,7 @@ import subprocess
 import logging
 from threading import Thread, Event
 import tkinter as tk
+import serial
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 if APP_DIR not in sys.path:

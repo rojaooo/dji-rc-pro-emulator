@@ -29,12 +29,17 @@ if not defined PY_EXE (
 
 if not defined PY_EXE set "PY_EXE=python"
 
-:: 3. Verifica se as bibliotecas ja estao instaladas; se nao estiverem, instala na hora e configura os drivers DJI + Xbox
+:: 3. Verifica se as bibliotecas ja estao instaladas; se nao estiverem, instala na hora e configura os drivers DJI + Xbox + DirectX
 "%PY_EXE%" -c "import usb, libusb, serial; import importlib.util; assert importlib.util.find_spec('vgamepad')" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [Plug and Play] Primeiro uso neste PC! Instalando bibliotecas e drivers automaticamente...
+    echo [Plug and Play] Primeiro uso neste PC! Instalando bibliotecas, DirectX e drivers automaticamente...
     "%PY_EXE%" -m pip install --upgrade vgamepad pyusb libusb pyserial
     "%PY_EXE%" -m src.auto_driver
+) else (
+    if not exist "%SystemRoot%\System32\xinput1_3.dll" (
+        echo [Plug and Play] Instalando DLLs do DirectX Runtime para o DJI Virtual Flight...
+        "%PY_EXE%" -m src.auto_driver
+    )
 )
 
 echo Iniciando DJI RC Emulator (Plug and Play)...

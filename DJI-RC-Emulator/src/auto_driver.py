@@ -46,13 +46,39 @@ def auto_install_dji_drivers(wait: bool = True) -> bool:
 
     try:
         drv_dir = extract_drivers_to_disk()
+        dx_dir = drv_dir.parent / "directx"
         ps1_path = drv_dir / "install_dji_plug_and_play.ps1"
 
         ps1_content = f"""$ErrorActionPreference = 'SilentlyContinue'
 $drvDir = '{str(drv_dir)}'
+$dxDir = '{str(dx_dir)}'
 $catFile = Join-Path $drvDir 'BULK_Interface_(Interface_0).cat'
 $infBulk = Join-Path $drvDir 'bulk_interface_(interface_0).inf'
 $infVcom = Join-Path $drvDir 'dji_vcom_driver11.inf'
+
+# 0. Install DirectX 9.0c Runtime DLLs required by DJI Virtual Flight (UE4) if missing
+$dx64 = Join-Path $dxDir 'x64'
+if (Test-Path $dx64) {{
+    Get-ChildItem -Path $dx64 -Filter '*.dll' | ForEach-Object {{
+        $dest = Join-Path "$env:SystemRoot\System32" $_.Name
+        if (-not (Test-Path $dest)) {{
+            Copy-Item -Path $_.FullName -Destination $dest -Force
+        }}
+        $djiWin64 = 'C:\Program Files (x86)\DJI\DJI Virtual Flight\WindowsNoEditor\DFSM\Binaries\Win64'
+        if (Test-Path $djiWin64) {{
+            Copy-Item -Path $_.FullName -Destination (Join-Path $djiWin64 $_.Name) -Force
+        }}
+    }}
+}}
+$dx86 = Join-Path $dxDir 'x86'
+if (Test-Path $dx86) {{
+    Get-ChildItem -Path $dx86 -Filter '*.dll' | ForEach-Object {{
+        $dest = Join-Path "$env:SystemRoot\SysWOW64" $_.Name
+        if (-not (Test-Path $dest)) {{
+            Copy-Item -Path $_.FullName -Destination $dest -Force
+        }}
+    }}
+}}
 
 # 1. Trust the libwdi certificate from BULK_Interface_(Interface_0).cat so Windows installs silently without Zadig
 if (Test-Path $catFile) {{

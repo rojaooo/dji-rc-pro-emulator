@@ -4,6 +4,7 @@ Receives processed stick/button values and feeds them to the virtual controller.
 """
 import logging
 import time
+from threading import Thread
 
 try:
     import vgamepad as vg
@@ -99,6 +100,7 @@ class VirtualGamepad:
 
         # Callback for gamepad status
         self.on_error = None
+        self._injected_buttons = set()
 
     @property
     def is_available(self) -> bool:
@@ -131,6 +133,16 @@ class VirtualGamepad:
             if self.on_error:
                 self.on_error(f"Failed to create virtual gamepad: {e}")
             return False
+
+    def pulse_button_async(self, xbox_name: str, count: int = 1, hold_time: float = 0.08, gap_time: float = 0.08):
+        """Asynchronously pulse a button (e.g. for cycling flight mode) without blocking stick updates."""
+        def _runner():
+            for _ in range(count):
+                self._injected_buttons.add(xbox_name)
+                time.sleep(hold_time)
+                self._injected_buttons.discard(xbox_name)
+                time.sleep(gap_time)
+        Thread(target=_runner, daemon=True, name="GamepadPulse").start()
 
     def stop(self):
         """Reset the controller on shutdown."""
@@ -177,6 +189,11 @@ class VirtualGamepad:
                     btn = get_vigem_button(xbox_name)
                     if btn is not None:
                         self._gamepad.press_button(btn)
+
+            for xbox_name in list(self._injected_buttons):
+                btn = get_vigem_button(xbox_name)
+                if btn is not None:
+                    self._gamepad.press_button(btn)
 
             self._gamepad.update()
         except Exception as e:

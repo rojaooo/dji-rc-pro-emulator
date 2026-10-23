@@ -108,6 +108,10 @@ from src.config_manager import ConfigManager
 from src.duml import (
     build_enable_simulator,
     build_read_sticks,
+    build_packet,
+    SOURCE_APP,
+    TARGET_RC,
+    CMD_TYPE_REQUEST,
     extract_all_packets_from_bytes,
     parse_stick_data,
 )
@@ -196,6 +200,9 @@ class DualThreadRCReader:
         self.on_stick_data = None
         self.on_connection_changed = None
         self.on_error = None
+        self.on_flight_mode = None
+        self._current_flight_mode: str | None = None
+        self._cmd27_pkt = build_packet(SOURCE_APP, TARGET_RC, CMD_TYPE_REQUEST, 0x06, 0x27, b'')
 
     def start(self):
         if self._main_thread and self._main_thread.is_alive():
@@ -334,6 +341,15 @@ class DualThreadRCReader:
                         parsed = parse_stick_data(pkt)
                         if parsed is not None:
                             latest = parsed
+                        elif len(pkt) >= 11 and pkt[9] == 0x06 and pkt[10] == 0x27:
+                            payload = pkt[11:-2]
+                            if len(payload) >= 18:
+                                raw_mode = payload[17]
+                                mode_name = {0x20: "CINE", 0x10: "NORMAL", 0x00: "SPORT"}.get(raw_mode)
+                                if mode_name and mode_name != self._current_flight_mode:
+                                    self._current_flight_mode = mode_name
+                                    if self.on_flight_mode:
+                                        self.on_flight_mode(mode_name)
                     if latest is not None:
                         self._latest_stick = latest
                         self._last_rx_time = time.perf_counter()
@@ -354,10 +370,17 @@ class DualThreadRCReader:
                 break
 
     def _paced_serial_writer(self, conn_stop: Event):
+        last_mode_poll = 0.0
         while not self._stop.is_set() and not conn_stop.is_set():
             now = time.perf_counter()
             if (now - self._last_rx_time) > 2.5:
                 raise ConnectionError("Conexão Serial com controle DJI perdida")
+            if (now - last_mode_poll) >= 0.12:  # ~8 Hz flight mode switch check
+                try:
+                    self._serial.write(self._cmd27_pkt)
+                except Exception:
+                    pass
+                last_mode_poll = now
             self._serial.write(build_read_sticks())
             if self._stick_event.wait(timeout=0.008):
                 self._stick_event.clear()
@@ -382,6 +405,15 @@ class DualThreadRCReader:
                     parsed = parse_stick_data(pkt)
                     if parsed is not None:
                         latest = parsed
+                    elif len(pkt) >= 11 and pkt[9] == 0x06 and pkt[10] == 0x27:
+                        payload = pkt[11:-2]
+                        if len(payload) >= 18:
+                            raw_mode = payload[17]
+                            mode_name = {0x20: "CINE", 0x10: "NORMAL", 0x00: "SPORT"}.get(raw_mode)
+                            if mode_name and mode_name != self._current_flight_mode:
+                                self._current_flight_mode = mode_name
+                                if self.on_flight_mode:
+                                    self.on_flight_mode(mode_name)
 
                 if latest is not None:
                     self._latest_stick = latest
@@ -402,10 +434,18 @@ class DualThreadRCReader:
 
     def _paced_writer(self, conn_stop: Event):
         """Paced writer thread: sends read_sticks at ~140 Hz and pushes newest stick data."""
+        last_mode_poll = 0.0
         while not self._stop.is_set() and not conn_stop.is_set():
             now = time.perf_counter()
             if (now - self._last_rx_time) > 2.5:
                 raise ConnectionError("Conexão USB com controle DJI perdida")
+
+            if (now - last_mode_poll) >= 0.12:
+                try:
+                    self._usb.write(self._cmd27_pkt)
+                except Exception:
+                    pass
+                last_mode_poll = now
 
             # Send read_sticks request
             self._usb.write(build_read_sticks())
@@ -425,7 +465,7 @@ class TkApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("DJI RC Pro Enterprise — Simulador (Zero-Delay + Gimbal Suave)")
-        self.root.geometry("740x540")
+        self.root.geometry("740x575")
         self.root.configure(bg="#1e1e2e")
         self.root.resizable(False, False)
 
@@ -452,10 +492,14 @@ class TkApp:
         self._latest_processed = None
         self._gimbal_held_pos = 0.0  # -1.0 .. +1.0 for held-angle mode
         self._last_stick_time = time.perf_counter()
+        self.sim_flight_mode = "NORMAL"
+        self.current_switch_mode = None
+        self._last_fn_state = False
 
         self._build_ui()
 
         self.rc.on_stick_data = self._on_stick_data
+        self.rc.on_flight_mode = self._on_flight_mode
         self.rc.on_connection_changed = self._on_connection_changed
         self.rc.on_error = self._on_error
         self.gamepad.on_error = self._on_error
@@ -554,10 +598,25 @@ class TkApp:
         btn_row = tk.Frame(mid, bg="#1e1e2e")
         btn_row.pack()
         self.btn_labels = {}
-        for name, label in [("c1", "C1"), ("c2", "C2"), ("photo", "Foto"), ("video", "Vídeo"), ("fn", "Fn (Modo de Voo)")]:
+        for name, label in [("c1", "C1"), ("c2", "C2"), ("photo", "Foto"), ("video", "Vídeo"), ("fn", "Fn")]:
             lbl = tk.Label(btn_row, text=label, bg="#313244", fg="#6c7086", padx=6, pady=3, font=("Segoe UI", 8, "bold"))
             lbl.pack(side=tk.LEFT, padx=2)
             self.btn_labels[name] = lbl
+
+        tk.Label(mid, text="Modo de Voo (Chavinha Física)", fg="#cdd6f4", bg="#1e1e2e", font=("Segoe UI", 9, "bold")).pack(pady=(8, 3))
+        mode_row = tk.Frame(mid, bg="#1e1e2e")
+        mode_row.pack()
+        self.mode_labels = {}
+        for m_name in ["CINE", "NORMAL", "SPORT"]:
+            lbl = tk.Label(mode_row, text=f" {m_name} ", bg="#313244", fg="#6c7086", padx=8, pady=3, font=("Segoe UI", 9, "bold"))
+            lbl.pack(side=tk.LEFT, padx=3)
+            self.mode_labels[m_name] = lbl
+
+        btn_resync = tk.Button(
+            mode_row, text="🔄 Sincronizar", bg="#313244", fg="#89b4fa", activebackground="#45475a",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=6, pady=2, command=self._resync_flight_mode
+        )
+        btn_resync.pack(side=tk.LEFT, padx=(6, 0))
 
         self.right_stick = StickCanvas(sticks_frame, "Stick Direito (Pitch / Roll)", size=190)
         self.right_stick.pack(side=tk.RIGHT, padx=10)
@@ -585,6 +644,13 @@ class TkApp:
         now = time.perf_counter()
         dt = max(0.001, min(0.05, now - self._last_stick_time))
         self._last_stick_time = now
+
+        fn_val = raw_data.get('fn', False)
+        if fn_val and not self._last_fn_state:
+            mode_order = ["NORMAL", "SPORT", "CINE"]
+            curr_idx = mode_order.index(self.sim_flight_mode) if self.sim_flight_mode in mode_order else 0
+            self.sim_flight_mode = mode_order[(curr_idx + 1) % 3]
+        self._last_fn_state = fn_val
 
         processed = self.input_proc.process(raw_data)
 
@@ -685,6 +751,67 @@ class TkApp:
         else:
             self.lbl_rate.config(text="Taxa USB: 0 Hz")
         self.root.after(1000, self._stats_tick)
+
+    def _on_flight_mode(self, mode_name: str):
+        self.root.after(0, self._handle_flight_mode_change, mode_name)
+
+    def _handle_flight_mode_change(self, mode_name: str):
+        if mode_name not in ("CINE", "NORMAL", "SPORT"):
+            return
+
+        colors = {
+            "CINE": ("#89b4fa", "#11111b"),    # Blue
+            "NORMAL": ("#a6e3a1", "#11111b"),  # Green
+            "SPORT": ("#fab387", "#11111b"),   # Orange
+        }
+        for name, lbl in self.mode_labels.items():
+            if name == mode_name:
+                bg_col, fg_col = colors.get(name, ("#89b4fa", "#11111b"))
+                lbl.config(bg=bg_col, fg=fg_col)
+            else:
+                lbl.config(bg="#313244", fg="#6c7086")
+
+        prev_switch = self.current_switch_mode
+        self.current_switch_mode = mode_name
+
+        if prev_switch is None:
+            # Primeiro posicionamento detectado ao conectar
+            mode_idx = {"NORMAL": 0, "SPORT": 1, "CINE": 2}
+            pulses = mode_idx.get(mode_name, 0)
+            if pulses > 0 and self.gamepad.is_initialized:
+                self.gamepad.pulse_button_async('X', count=pulses)
+                self.sim_flight_mode = mode_name
+                self.lbl_msg.config(
+                    text=f"Chavinha em {mode_name}: Sincronizando com simulador ({pulses}x X)...",
+                    fg="#a6e3a1"
+                )
+            return
+
+        if mode_name != prev_switch:
+            mode_idx = {"NORMAL": 0, "SPORT": 1, "CINE": 2}
+            target_idx = mode_idx[mode_name]
+            current_idx = mode_idx.get(self.sim_flight_mode, 0)
+            pulses = (target_idx - current_idx) % 3
+            if pulses > 0 and self.gamepad.is_initialized:
+                self.gamepad.pulse_button_async('X', count=pulses)
+                self.sim_flight_mode = mode_name
+                self.lbl_msg.config(
+                    text=f"Chavinha alterada para {mode_name}! Alternando modo no simulador ({pulses}x)...",
+                    fg="#a6e3a1"
+                )
+
+    def _resync_flight_mode(self):
+        """Força a sincronização do simulador com a posição atual da chavinha (assume início em NORMAL)."""
+        mode = self.current_switch_mode or "NORMAL"
+        mode_idx = {"NORMAL": 0, "SPORT": 1, "CINE": 2}
+        pulses = mode_idx.get(mode, 0)
+        if pulses > 0 and self.gamepad.is_initialized:
+            self.gamepad.pulse_button_async('X', count=pulses)
+        self.sim_flight_mode = mode
+        self.lbl_msg.config(
+            text=f"Modo sincronizado: Chavinha em {mode}!",
+            fg="#a6e3a1"
+        )
 
     def _on_close(self):
         self.rc.stop()
